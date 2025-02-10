@@ -67,6 +67,7 @@ EndMacro
 
 
 Macro "Model.OnModelReady" (Args,Result)
+Body:
     Return({"Base Folder": "%Model Folder%"})
 EndMacro
 
