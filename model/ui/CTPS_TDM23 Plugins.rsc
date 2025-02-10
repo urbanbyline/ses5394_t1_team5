@@ -9,7 +9,7 @@ Macro "Model.Attributes" (Args,Result)
         {"CloseOpenFiles", 1},
         {"ResizeImage", 1},
         {"CodeUI", "ui\\tdm23_ui.dbd"},
-        {"DebugMode", 0},
+        {"DebugMode", 1},
         {"DrawParameterTypes", "All Parameter Types"},
         {"ExpandStages", "Side by Side"},
         {"HideBanner", null},
