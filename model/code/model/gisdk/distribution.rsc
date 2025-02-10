@@ -14,7 +14,7 @@ macro "Prepare Distribution Inputs" (Args)
                                     Label: "identity"})
 
    iz_mobj.SetVector({Core: "iz", Vector: 0, FillAll: "Rows"})
-   iz_mobj.SetVector({Core: "iz", Vector: 1, Diagonal: 1})
+   iz_mobj.SetVector({Core: "iz", Vector: 1, Diagonal: "Diagonal"})
 
    Return(ok)
 endmacro
