@@ -676,3 +676,13 @@ leaflet(dif_blocks) |>
                                                   fillOpacity = 0.5),
               label = veh_labels)
 ```
+
+You might decide to do your data visualization in ArcGIS or QGIS. If that's you preference, you can write the spatial data to a shapefile:
+
+```{r, warning=FALSE, message=FALSE}
+
+st_write(dif_blocks,
+         here("T1",
+              "dif_blocks.shp"),
+         append = FALSE)
+```
