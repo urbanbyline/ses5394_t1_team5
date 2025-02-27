@@ -1,0 +1,329 @@
+---
+title: "T1: Vehicle Availability"
+format: 
+  html:
+    theme: minty
+    toc: true
+    toc-location: left
+editor: visual
+---
+
+## Load libraries
+
+This analysis uses the following packages:
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(sf)
+library(DBI)
+library(here)
+library(leaflet)
+library(maptiles)
+library(tidyterra)
+library(knitr)
+library(tigris)
+
+sf::sf_use_s2(FALSE)
+```
+
+```{r}
+TAZs <- here("model",
+             "inputs",
+             "zonal",
+             "shp",
+             "CTPS_TDM23_TAZ_2017g_v202303.shp") |>
+  st_read(quiet = TRUE) |>
+  st_transform("WGS84")
+```
+
+```{r}
+MA_pop <- here("model",
+               "inputs",
+               "zonal",
+               "ma_population_run97-176_2019_v20240109.csv") |>
+  read_csv(show_col_types = FALSE) |>
+  mutate(block_id = as.character(block_id))
+
+head(MA_pop, n = 10) |>
+  kable()
+
+MA_pop <- MA_pop %>%
+  mutate(unique_id = paste(hid, person_num, sep = "_"))
+```
+
+## Edit model inputs
+
+### UBI Policy Implementation
+
+We are looking to implement UBI policy of \$500 per month (\$6000 annually) per person in Somerville. We therefore need to update their wage_income but also their hh_income.
+
+somerville_pop_ubi_one - increased everyone's wages by \$6000
+
+```{r}
+
+somerville_TAZs <- TAZs |>
+  filter(town %in% c("SOMERVILLE"))
+
+somerville_blocks <-blocks(state="MA",
+                           county="Middlesex",
+                           year = 2010,
+                           progress_bar= FALSE) |>
+  st_transform("WGS84") |>
+  st_filter(somerville_TAZs)
+
+somerville_pop <- here("model",
+                       "inputs",
+                       "zonal",
+                       "ma_population_run97-176_2019_v20240109.csv") |>
+  read_csv(show_col_types = FALSE) |>
+  mutate(block_id = as.character(block_id)) |>
+  filter()
+
+# Filter ma_pop to include only rows where block_id matches GEOID10 in somerville_blocks
+somerville_pop <- MA_pop %>%
+  filter(block_id %in% somerville_blocks$GEOID10)
+
+# View the first few rows
+head(somerville_pop)
+
+result <- somerville_pop%>%
+  filter(hid == "2009000218082_38985")
+print(result)
+
+# Add 6000 to every row in wage_inc column
+somerville_pop_ubi_one <- somerville_pop %>%
+  mutate(wage_inc = wage_inc + 6000)
+
+result_2 <- somerville_pop_ubi_one%>%
+  filter(hid == "2009000218082_38985")
+print(result_2)
+
+somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
+  group_by(hid) %>%  
+  mutate(hh_inc = sum(wage_inc, na.rm = TRUE)) %>%  
+  ungroup()  # Remove grouping to keep dataset structure
+
+result_3 <-somerville_pop_ubi_one%>%
+  filter(hid == "2009000218082_38985")
+print(result_3)
+
+MA_pop_ubi_one <- MA_pop %>%
+  left_join(somerville_pop_ubi_one %>% select(unique_id, wage_inc, hh_inc), by = "unique_id") %>%
+  # Update wage_inc and hh_inc with values from somerville_pop_ubi_one
+  mutate(
+    wage_inc = coalesce(wage_inc.y, wage_inc.x),  # Replace old wage_inc with updated values
+    hh_inc = coalesce(hh_inc.y, hh_inc.x)         # Replace old hh_inc with updated values
+  ) %>%
+  select(-wage_inc.x, -wage_inc.y, -hh_inc.x, -hh_inc.y)  # Remove redundant columns
+
+
+# View the first few rows of the resulting data frame
+head(MA_pop_ubi_one)
+
+result_4 <-MA_pop_ubi_one%>%
+  filter(hid == "2009000218082_38985")
+print(result_4)
+
+# Specify the directory and save the CSV file there
+write.csv(MA_pop_ubi_one, "C:/Users/hjun9/OneDrive - Harvard University/GSD MUP 2025 Spring/ses5394_t1_team5/model/inputs/zonal/MA_pop_ubi_one.csv", row.names = FALSE)
+
+
+classify_income_level <- function(persons, hh_inc) {
+  threshold <- case_when(
+    persons == 1 ~ 22688,
+    persons == 2 ~ 30060,
+    persons == 3 ~ 35137,
+    persons == 4 ~ 45718,
+    persons == 5 ~ 55036,
+    persons == 6 ~ 62641,
+    persons == 7 ~ 72239,
+    persons >= 8 ~ 81002,
+    TRUE ~ NA_real_
+  )
+  
+  income_level <- case_when(
+    hh_inc < threshold ~ "Low Income",
+    hh_inc > 100000 ~ "High Income",
+    TRUE ~ "Middle Income"
+  )
+  
+  return(income_level)
+}
+
+# Apply classification to both datasets
+somerville_pop <- somerville_pop %>%
+  mutate(income_level = classify_income_level(persons, hh_inc))
+
+somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
+  mutate(income_level = classify_income_level(persons, hh_inc))
+
+# Compare income levels before and after UBI
+income_comparison <- somerville_pop %>%
+  select(hid,unique_id, persons, hh_inc, income_level) %>%
+  rename(original_income_level = income_level) %>%
+  inner_join(
+    somerville_pop_ubi_one %>%
+      select(unique_id, income_level, block_id) %>%
+      rename(ubi_income_level = income_level),
+    by = "unique_id"
+  )
+
+# Identify households that changed income levels
+income_comparison <- income_comparison %>%
+  mutate(income_change = case_when(
+    original_income_level != ubi_income_level ~ "Changed",
+    TRUE ~ "No Change"
+  ))
+
+# View the households that changed income levels
+income_changes <- income_comparison %>% filter(income_change == "Changed")
+print(income_changes)
+
+# Summarize the changes
+income_summary <- income_comparison %>%
+  count(original_income_level, ubi_income_level)
+
+print(income_summary)
+```
+
+```{r}
+
+base_db <- dbConnect(drv=RSQLite::SQLite(), 
+                     dbname=here("model",
+                                 "outputs",
+                                 "Base",
+                                 "tdm23.db"))
+```
+
+```{r}
+my_query <- paste0("SELECT * FROM veh WHERE block_id IN (",
+                   str_flatten_comma(somerville_blocks$GEOID10),
+                   ")")
+
+somer_vehs_base <- dbGetQuery(base_db, my_query)
+
+head(somer_vehs_base) |>
+  kable()
+```
+
+```{r}
+dbDisconnect(base_db)
+
+alt_db <- dbConnect(drv=RSQLite::SQLite(), 
+                     dbname=here("model",
+                                 "outputs",
+                                 "UBI-1",
+                                 "tdm23.db"))
+```
+
+```{r}
+my_query <- paste0("SELECT * FROM veh WHERE block_id IN (",
+                   str_flatten_comma(somerville_blocks$GEOID10),
+                   ")")
+
+somer_vehs_alt <- dbGetQuery(alt_db, my_query)
+
+dbDisconnect(alt_db)
+
+head(somer_vehs_alt) |>
+  kable()
+
+
+```
+
+```{r}
+somer_vehs_base <- somer_vehs_base |>
+  rename(veh_suff_base = veh_suff) |>
+  select(-num_vehs)
+
+somer_vehs_alt <- somer_vehs_alt |>
+  rename(veh_suff_alt = veh_suff) |>
+  select(-num_vehs)
+
+somer_vehs_dif <- full_join(somer_vehs_base, somer_vehs_alt) |>
+  mutate(veh_suff_base = ifelse(is.na(veh_suff_base), "new", veh_suff_base))
+
+somer_vehs_changed_hh <- somer_vehs_dif |>
+  mutate(change = case_when(veh_suff_base == "new" & veh_suff_alt == "zv" ~
+                              "New zv",
+                            veh_suff_base == "new" & veh_suff_alt == "iv" ~
+                              "New iv",
+                            veh_suff_base == "new" & veh_suff_alt == "sv" ~
+                              "New sv",
+                            veh_suff_base == "zv" & veh_suff_alt == "iv" ~
+                              "gained vehicle",
+                            veh_suff_base == "zv" & veh_suff_alt == "sv" ~
+                              "gained vehicle",
+                            veh_suff_base == "sv" & veh_suff_alt == "zv" ~
+                              "lost vehicle",
+                            veh_suff_base == "sv" & veh_suff_alt == "iv" ~
+                              "lost vehicle",
+                            veh_suff_base == "iv" & veh_suff_alt == "zv" ~
+                              "lost vehicle",
+                            veh_suff_base == "iv" & veh_suff_alt == "sv" ~
+                              "gained vehicle",
+                            TRUE ~ "no change"))
+
+somer_vehs_changed_blocks <- somer_vehs_changed_hh |>
+  group_by(block_id) |>
+  summarise(n_hhs = n(),
+            n_new_zv = sum(change == "New zv"),
+            n_new_iv = sum(change == "New iv"),
+            n_new_sv = sum(change == "New sv"),
+            n_gained_veh = sum(change == "gained vehicle"),
+            n_lost_veh = sum(change == "lost vehicle")) |>
+  filter(n_lost_veh +
+           n_gained_veh +
+           n_new_sv +
+           n_new_iv +
+           n_new_zv > 0) |>
+  rename(GEOID10 = block_id)
+
+somer_vehs_changed_blocks <- somer_vehs_changed_blocks %>%
+  mutate(percent_hh_gained_car = (n_gained_veh / n_hhs) * 100)
+
+kable(somer_vehs_changed_blocks)
+
+
+combined_df <- somer_vehs_changed_hh %>%
+  right_join(income_changes, by = "hid")
+
+num_gained_vehicle <- combined_df %>%
+  filter(change == "gained vehicle") %>%
+  distinct(hid) %>%
+  nrow()
+
+num_income_changed <- combined_df %>%
+  filter(income_change == "Changed") %>%
+  distinct(hid) %>%
+  nrow()
+
+print(num_income_changed)
+
+dif_blocks <- somerville_blocks |>
+  right_join(somer_vehs_changed_blocks) 
+
+dif_blocks <- dif_blocks %>%
+  filter(n_hhs >= 20)
+
+
+# Assuming somer_veh_changed_blocks is an sf dataframe with geometry
+plot <- ggplot(dif_blocks) +
+  geom_sf(aes(fill = percent_hh_gained_car), color = "black", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", name = "% HH Gained Car") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),   # Removes grid lines
+    axis.text = element_blank(),    # Removes axis labels
+    axis.ticks = element_blank(),   # Removes axis ticks
+    axis.title = element_blank()    # Removes axis titles
+  ) +
+  labs(title = "Percentage of Households That Gained a Car",
+       subtitle = "By Block",
+       caption = "Source: TDM & MA Census")
+
+ggsave("somer_veh_percent_hh_gained_car_1.png", plot = plot, width = 8, height = 6, dpi = 300)
+
+
+
+```

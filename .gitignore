@@ -57,4 +57,11 @@ data/NHTS/vehpub.csv
 # All model input and output
 model/outputs/
 model/inputs/
+model/code/model
+
+#ignoring other project files
+p2/
+p3/
+T2/
+
 
