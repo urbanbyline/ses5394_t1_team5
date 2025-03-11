@@ -21,9 +21,9 @@ library(srvyr)
 library(mlogit)
 library(caret)
 library(pscl)
-library(dplyr)
 library(readr)
 library(MASS)
+library(dplyr)
 
 
 here("code",
@@ -72,17 +72,27 @@ trip_data <- dplyr::select(trip_data,
 
 head(trip_data, 20)
 
+trip_data <- trip_data %>%
+  mutate(TRAVDAY = case_when(
+    TRAVDAY %in% c("02", "03", "04", "05", "06") ~ "WEEKDAY",
+    TRAVDAY %in% c("01", "07") ~ "WEEKEND",
+    TRUE ~ NA_character_  # Handle any unexpected values
+  ))
+
+person_data <- person_data %>%
+  mutate(TRAVDAY = case_when(
+    TRAVDAY %in% c("02", "03", "04", "05", "06") ~ "WEEKDAY",
+    TRAVDAY %in% c("01", "07") ~ "WEEKEND",
+    TRUE ~ NA_character_  # Handle any unexpected values
+  ))
+
 chaffeured_trips <- trip_data %>%
   mutate(UNIQUEID = paste(HOUSEID, PERSONID, sep = "_"))
 
 chaffeured_trips <- trip_data %>%
-  filter(WHYFROM == "06" | WHYTO == "06") %>%
+  filter(WHYTO == "06") %>%
   group_by(HOUSEID, PERSONID)
 
-
-chaffeured_trips |>
-  filter(HOUSEID == "40794301" & PERSONID == "02") |>
-  kable()
 
 ```
 
@@ -136,15 +146,28 @@ With the predictor variables:
 
 -   TRIP LEVEL - TRAVEL DAY
 
+First clean up household level data. Then clean up person level data. Then clean up chaffeur trip count.
+
+Then left join household level into person level data and chaffeur trip count.
+
+chaffeured_trips \<- chaffeured_trips %\>%
+
+mutate(TRAVDAY = case_when(
+
+TRAVDAY %in% c("02", "03", "04", "05", "06") \~ "WEEKDAY",
+
+TRAVDAY %in% c("01", "07") \~ "WEEKEND",
+
+TRUE \~ NA_character\_ \# Handle any unexpected values
+
+))
+
 ```{r}
+
 hh_data <- hh_data |>
-  select(WRKCOUNT,
-         DRVRCNT,
-         HHVEHCNT,
-         HHSIZE,
-         NUMADLT,
-         HHFAMINC,
-         HOUSEID)
+  dplyr::select(WRKCOUNT, DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HOUSEID)
+
+
 hh_data <- hh_data |>
   mutate(veh_avail = case_when(HHVEHCNT == 0 ~ "Zero",
                                DRVRCNT > HHVEHCNT ~ "Insuff.",
@@ -152,13 +175,13 @@ hh_data <- hh_data |>
 hh_data <- hh_data |>
   mutate(n_child = HHSIZE - NUMADLT)
 
-n_seniors <- person_data |>
+n_seniors_in_hh <- person_data |>
   mutate(is_senior = R_AGE > 64) |>
   group_by(HOUSEID) |>
-  summarise(n_seniors = sum(is_senior))
+  summarise(n_seniors_in_hh = sum(is_senior))
 
 hh_data <- hh_data |>
-  left_join(n_seniors)
+  left_join(n_seniors_in_hh)
 
 hh_data <- hh_data |>
   mutate(three_drivers = DRVRCNT > 2)
@@ -187,40 +210,54 @@ hh_data <- hh_data |>
   left_join(non_work_driver)
 
 hh_data <- hh_data |>
-  select(HOUSEID,
-         veh_avail,
-         WRKCOUNT,
-         n_child,
-         n_seniors,
-         n_extra_drivers,
-         three_drivers,
-         non_work_driver,
-         income)
+  dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors_in_hh, HHSIZE, income)
 
-workers <- person_data |>
-  filter(WORKER == "01") |>
-  select(HOUSEID, PERSONID, R_SEX, WKFTPT, R_RACE, R_AGE) |>
-  mutate(WKFTPT = as.numeric(WKFTPT)) |>
-  filter(WKFTPT > 0) |>
-  mutate(female = R_SEX == "02") |>
-  mutate(part_time = WKFTPT == 2) |>
-  inner_join(hh_data)
+
+ppl_data <- person_data %>%
+  dplyr::select(HOUSEID, PERSONID, R_SEX, WKFTPT, R_RACE, R_AGE, TRAVDAY) %>%
+  mutate(
+    WKFTPT = as.numeric(WKFTPT),
+    age_category = case_when(
+      R_AGE >= 1 & R_AGE <= 15 ~ "child",
+      R_AGE >= 17 & R_AGE <= 21 ~ "YA",
+      R_AGE > 21 & R_AGE <= 65 ~ "adult",
+      R_AGE >= 66 ~ "senior",
+      TRUE ~ NA_character_  # Handles any unexpected values
+    )
+  ) %>%
+  filter(WKFTPT > 0) %>%
+  mutate(
+    female = R_SEX == "02",
+    part_time = WKFTPT == 2
+  )
 
 
 chaffeured_trips_count <- chaffeured_trips |>
-  group_by(HOUSEID, PERSONID) |>
+  group_by(HOUSEID, PERSONID, TRAVDAY) |>
   summarise(chaffeured_trips = n())
 
-workers <- workers |>
-  left_join(chaffeured_trips_count) |>
-  replace_na(list(chaffeured_trips = 0)) |>
-  mutate(income = factor(income, levels = c("low", "middle", "high")))
+
+ppl_data <- ppl_data |>
+  left_join(hh_data, by = "HOUSEID") |>
+  left_join(chaffeured_trips_count, by = c("HOUSEID", "PERSONID")) |>
+  mutate(chaffeured_trips = replace_na(chaffeured_trips, 0))  # Ensure NA values are replaced with 0
+
+library(dplyr)
+
+ppl_data <- ppl_data %>%
+  rename(TRAVDAY = TRAVDAY.x)
+
+
+
+
+
+
 ```
 
 ### Data Visualizations and Regression
 
 ```{r}
-ggplot(workers) +
+ggplot(ppl_data) +
   geom_histogram(aes(x = chaffeured_trips),
                  binwidth = 1,
                  color = "gray",
@@ -231,37 +268,35 @@ ggplot(workers) +
   theme_minimal()
 
 
-workers |>
+ppl_data |>
   summarise(`Average count of chaffeured_trips trips` = mean(chaffeured_trips),
             `Standard deviation` = sd(chaffeured_trips)) |>
   kable(digits = 3)
 
-model_nb <- glm.nb(chaffeured_trips ~ n_seniors + 
-                     WRKCOUNT + 
-                     veh_avail + 
-                     income + 
-                     female + 
-                     part_time,  data = workers)
-summary(model_nb)
-
 
 zero_inflated_chaffeured <- zeroinfl(chaffeured_trips ~ 
-                          n_seniors + 
+                          n_seniors_in_hh +
+                          n_child +
+                          HHSIZE+
                           R_AGE +
                           WRKCOUNT +                          
                           veh_avail +                          
                           income +                          
                           female +                          
-                          part_time |                         
-                          n_seniors + 
+                          part_time +
+                          TRAVDAY|                         
+                          n_seniors_in_hh +
+                          n_child +
+                          HHSIZE+
                           R_AGE +
                           WRKCOUNT +                          
                           veh_avail +                          
                           income +                          
                           female +                          
-                          part_time,     
-                        data = workers,    
-                        dist = "poisson")
+                          part_time+
+                          TRAVDAY,     
+                        data = ppl_data,    
+                        dist = "negbin")
 
 summary(zero_inflated_chaffeured)
 
