@@ -60,3 +60,5 @@ model/inputs/
 
 model/ui/
 
+# large intermediate data files from P4
+P4/data/
